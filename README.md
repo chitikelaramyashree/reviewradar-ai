@@ -129,6 +129,3 @@ npm run dev
 
 ---
 
-## 👨‍💻 Author
-
-Ramya
