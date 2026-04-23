@@ -1,0 +1,10 @@
+flask
+flask-cors
+python-dotenv
+openai
+pandas
+numpy
+sentence-transformers
+transformers
+faiss-cpu
+torch
