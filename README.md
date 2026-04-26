@@ -1,131 +1,130 @@
-# 🚀 ReviewRadar AI
+# ReviewRadar AI
 
 An AI-powered review analysis system that extracts insights from customer reviews using semantic search and LLM-based summarization.
 
 ---
 
-## 🧠 Features
+## Features
 
-* 🔍 Semantic search using FAISS
-* 🤖 AI-powered summarization (OpenRouter / LLaMA)
-* 😊 Sentiment filtering (positive/negative)
-* ⚡ Fast retrieval with precomputed embeddings
-* 🎨 Interactive React UI
+- Semantic search using FAISS
+- AI-powered summarization (OpenRouter / LLaMA 3 8B)
+- Sentiment filtering (positive/negative)
+- Fast retrieval with precomputed embeddings
+- Interactive React UI
 
 ---
 
-## 🛠️ Tech Stack
+## Tech Stack
 
 **Backend**
-
-* Python
-* Flask
-* Sentence Transformers
-* FAISS
-* HuggingFace Transformers
-* OpenRouter API
+- Python
+- FastAPI
+- Sentence Transformers
+- FAISS
+- HuggingFace Transformers
+- OpenRouter API
 
 **Frontend**
-
-* React (Vite)
-* JavaScript
-* CSS
+- React 19 (Vite)
+- JavaScript
+- CSS
 
 ---
 
-## 📂 Project Structure
+## Project Structure
 
 ```
 genAI/
-│
 ├── backend/
-│   ├── app.py
-│   ├── model.py
+│   ├── app.py               # FastAPI server
+│   ├── model.py             # AI pipeline
+│   ├── Dockerfile           # For Hugging Face Spaces deployment
+│   ├── requirements.txt
 │   ├── embeddings.npy
 │   ├── faiss.index
-│   ├── Amazon_Reviews.csv
+│   └── Amazon_Reviews.csv
 │
 ├── review-ui/
 │   ├── src/
-│   ├── package.json
+│   └── package.json
 │
 └── README.md
 ```
 
 ---
 
-## ⚙️ Setup Instructions
+## Local Setup
 
-### 1️⃣ Clone Repo
+### 1. Clone the repo
 
 ```bash
-git clone https://github.com/your-username/reviewradar-ai.git
+git clone https://github.com/chitikelaramyashree/reviewradar-ai.git
 cd reviewradar-ai
 ```
 
----
-
-### 2️⃣ Backend Setup
+### 2. Backend
 
 ```bash
 cd backend
 python -m venv venv
-venv\Scripts\activate
+.\venv\Scripts\Activate.ps1       # Windows
+# source venv/bin/activate        # macOS / Linux
+
 pip install -r requirements.txt
 ```
 
-Create `.env` file:
-
+Create `.env`:
 ```
 OPENROUTER_API_KEY=your_api_key_here
 ```
 
 Run:
-
 ```bash
-python app.py
+uvicorn app:app --reload
 ```
 
----
+Backend starts at `http://127.0.0.1:8000`. Wait for `Application startup complete` before using the UI.
 
-### 3️⃣ Frontend Setup
+### 3. Frontend
 
+Open a second terminal:
 ```bash
 cd review-ui
 npm install
 npm run dev
 ```
 
----
-
-## 🌐 Usage
-
-* Open: http://localhost:5173
-* Enter query like:
-
-  * "poor delivery"
-  * "bad service"
-* View:
-
-  * Top matching reviews
-  * AI-generated summary
+Open `http://localhost:5173` in your browser.
 
 ---
 
-## ⚡ Notes
+## API Docs
 
-* Uses precomputed embeddings (no recomputation needed)
-* Works fully locally except LLM summarization
-* Requires internet for OpenRouter API
+FastAPI auto-generates interactive docs at `http://127.0.0.1:8000/docs`.
 
 ---
 
-## 🚀 Future Improvements
+## Deployment
 
-* Better UI/UX (dashboard style)
-* Charts for sentiment analysis
-* Filtering and sorting
-* Deployment (Render / Vercel)
+| Part | Platform |
+|---|---|
+| Backend | Hugging Face Spaces (Docker) — free |
+| Frontend | Vercel — free |
+
+See `PROJECT_DOCS.md` for full deployment steps.
 
 ---
 
+## Usage
+
+- Open the app and click **Analyze Reviews**
+- Type a natural language query: `"poor delivery"`, `"great quality"`, `"bad packaging"`
+- View top matching reviews with sentiment labels and an AI-generated summary
+
+---
+
+## Notes
+
+- Uses precomputed embeddings — no re-encoding on each request
+- Requires internet only for OpenRouter API calls
+- First startup takes 30–90 seconds while ML models load

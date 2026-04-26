@@ -1,4 +1,4 @@
-# ReviewRadar AI
+# ReviewRadar AI — Project Documentation
 
 An AI-powered review analysis system that extracts insights from Amazon customer reviews using semantic search, sentiment filtering, and LLM-based summarization.
 
@@ -43,7 +43,7 @@ User types query
         ↓
 React frontend sends POST /search { "query": "..." }
         ↓
-Flask backend (app.py) validates the request
+FastAPI backend (app.py) validates request via Pydantic model
         ↓
 model.py encodes the query using SentenceTransformer (all-MiniLM-L6-v2)
         ↓
@@ -67,11 +67,13 @@ UI renders: sentiment badges, review cards, and AI bullet-point summary
 ## Tech Stack
 
 **Backend**
-- Python, Flask, Flask-CORS
+- Python, FastAPI
+- Pydantic (request validation)
 - Sentence Transformers (`all-MiniLM-L6-v2`)
 - FAISS (vector similarity search)
 - HuggingFace Transformers (DistilBERT sentiment)
 - OpenRouter API (LLaMA 3 8B)
+- Uvicorn (ASGI server)
 
 **Frontend**
 - React 19 (Vite)
@@ -84,8 +86,9 @@ UI renders: sentiment badges, review cards, and AI bullet-point summary
 ```
 genAI/
 ├── backend/
-│   ├── app.py               # Flask server — API entry point
+│   ├── app.py               # FastAPI server — API entry point
 │   ├── model.py             # AI pipeline — search, sentiment, summarization
+│   ├── Dockerfile           # Docker config for Hugging Face Spaces deployment
 │   ├── requirements.txt     # Python dependencies
 │   ├── Amazon_Reviews.csv   # Raw review dataset (~21,000 rows)
 │   ├── embeddings.npy       # Pre-computed review embeddings (31MB)
@@ -99,6 +102,8 @@ genAI/
 │   │   ├── App.css              # All styles (light/dark, responsive)
 │   │   ├── main.jsx             # React entry point
 │   │   ├── components/
+│   │   │   ├── LandingPage.jsx  # Hero page with call-to-action
+│   │   │   ├── AnalyzerPage.jsx # Search interface — sends queries, shows results
 │   │   │   ├── ResultCard.jsx   # Single review card with sentiment badge
 │   │   │   └── SummaryCard.jsx  # Single AI insight bullet card
 │   │   └── utils/
@@ -107,7 +112,8 @@ genAI/
 │   ├── vite.config.js
 │   └── package.json
 │
-└── README.md
+├── README.md
+└── PROJECT_DOCS.md
 ```
 
 ---
@@ -117,9 +123,11 @@ genAI/
 ### Backend
 
 **`app.py`**
-Flask server with two routes:
-- `POST /search` — validates the incoming JSON request, calls `search_and_summarize`, and returns the result as JSON. Returns descriptive 400/500 errors if validation fails or the pipeline throws.
+FastAPI server with two routes:
+- `POST /search` — validates the incoming JSON using a Pydantic `SearchRequest` model, calls `search_and_summarize`, and returns the result as JSON. Returns descriptive 400/500 errors automatically via Pydantic validation and `HTTPException`.
 - `GET /health` — returns `{"status": "ready"}`. Use this to confirm the server has finished loading models.
+
+Interactive API docs are auto-generated at `/docs` (Swagger UI) and `/redoc`.
 
 **`model.py`**
 The complete AI pipeline. Loads at startup:
@@ -129,14 +137,17 @@ The complete AI pipeline. Loads at startup:
 
 The exported `search_and_summarize(query)` function runs the full RAG loop.
 
+**`Dockerfile`**
+Docker configuration for deploying to Hugging Face Spaces. Uses Python 3.11 slim, installs dependencies, and starts uvicorn on port 7860 (required by HF Spaces).
+
 **`requirements.txt`**
-All Python packages needed. Install with `pip install -r requirements.txt`.
+All Python packages needed. Key packages: `fastapi`, `uvicorn[standard]`, `sentence-transformers`, `transformers`, `faiss-cpu`, `torch`, `openai`, `pandas`, `numpy`.
 
 ### Frontend
 
 **`App.jsx`**
 Two pages managed by a `page` state variable (`"home"` or `"analyzer"`):
-- `LandingPage` — explains the product and shows a "Analyze Reviews" call-to-action button.
+- `LandingPage` — explains the product and shows an "Analyze Reviews" call-to-action button.
 - `AnalyzerPage` — the search interface. Sends the query to the backend, receives results, and passes them to `parser.js`. Has a Back button to return to the landing page and a Clear button to reset results.
 
 **`parser.js`**
@@ -148,19 +159,16 @@ Renders one review with a color-coded sentiment badge: green for positive, red f
 **`SummaryCard.jsx`**
 Renders one AI-generated bullet point. If the LLM included a bold title (markdown `**Title**`), it is displayed as a card heading.
 
-**`App.css`**
-CSS custom properties (`--accent`, `--bg-primary`, etc.) drive the entire theme. A `@media (prefers-color-scheme: dark)` block swaps the palette for dark mode automatically. No external CSS library is used.
-
 ### Data Files
 
 **`Amazon_Reviews.csv`** (13MB, ~21,000 rows)
-The raw dataset. Each row has a `Review Text` column. Loaded once at startup into a Python list. Not queried at search time — only used to retrieve the text content of matching indices returned by FAISS.
+The raw dataset. Each row has a `Review Text` column. Loaded once at startup into a Python list.
 
 **`embeddings.npy`** (31MB)
 A NumPy array of shape `[num_reviews, 384]`. Each row is the pre-computed sentence embedding for the corresponding review. Pre-computing avoids re-encoding 21,000 reviews on every request.
 
 **`faiss.index`** (31MB)
-A FAISS index built from `embeddings.npy`. Given a query vector, FAISS finds the nearest neighbours in milliseconds across the full dataset without scanning every row.
+A FAISS index built from `embeddings.npy`. Given a query vector, FAISS finds the nearest neighbours in milliseconds across the full dataset.
 
 ---
 
@@ -171,7 +179,6 @@ A FAISS index built from `embeddings.npy`. Given a query vector, FAISS finds the
 | Variable | Required | Description |
 |---|---|---|
 | `OPENROUTER_API_KEY` | Yes | API key from openrouter.ai — used to call LLaMA 3 8B for summarization |
-| `FLASK_DEBUG` | No | Set to `true` to enable Flask debug mode. Never use in production. |
 
 Copy `.env.example` to `.env` and fill in your key:
 
@@ -183,7 +190,7 @@ OPENROUTER_API_KEY=your_key_here
 
 | Variable | Default | Description |
 |---|---|---|
-| `VITE_API_URL` | `http://127.0.0.1:5000` | Base URL of the Flask backend |
+| `VITE_API_URL` | `http://127.0.0.1:8000` | Base URL of the FastAPI backend |
 
 Only needed if you deploy the backend somewhere other than localhost. Create `review-ui/.env`:
 
@@ -193,7 +200,7 @@ VITE_API_URL=https://your-deployed-backend.com
 
 ---
 
-## Installation and Setup
+## Installation and Local Setup
 
 ### 1. Clone the repo
 
@@ -209,8 +216,8 @@ cd backend
 
 # Create and activate a virtual environment
 python -m venv venv
-venv\Scripts\activate        # Windows
-# source venv/bin/activate   # macOS / Linux
+.\venv\Scripts\Activate.ps1      # Windows
+# source venv/bin/activate       # macOS / Linux
 
 # Install all dependencies
 pip install -r requirements.txt
@@ -220,10 +227,10 @@ cp .env.example .env
 # Open .env and replace the placeholder with your real OpenRouter key
 
 # Start the server
-python app.py
+uvicorn app:app --reload
 ```
 
-The backend starts at `http://127.0.0.1:5000`. The first startup takes **30–90 seconds** while the ML models and index load into memory. Wait for the `* Running on http://127.0.0.1:5000` message before using the UI.
+The backend starts at `http://127.0.0.1:8000`. The first startup takes **30–90 seconds** while the ML models and index load into memory. Wait for `Application startup complete` before using the UI.
 
 ### 3. Frontend setup
 
@@ -241,14 +248,51 @@ The UI starts at `http://localhost:5173`. Open that URL in your browser.
 
 ## Testing the API Directly
 
+FastAPI provides interactive docs at `http://127.0.0.1:8000/docs` — you can test endpoints there without any extra tools.
+
+Or via curl:
+
 ```bash
 # Confirm the server is ready
-curl http://127.0.0.1:5000/health
+curl http://127.0.0.1:8000/health
 
 # Run a search
-curl -X POST http://127.0.0.1:5000/search \
+curl -X POST http://127.0.0.1:8000/search \
   -H "Content-Type: application/json" \
   -d '{"query": "poor delivery experience"}'
+```
+
+---
+
+## Deployment
+
+### Backend — Hugging Face Spaces (free, 16GB RAM)
+
+Hugging Face Spaces is the recommended free option because it provides 16GB RAM — enough to run torch, DistilBERT, and SentenceTransformers simultaneously.
+
+1. Create a free account at **huggingface.co**
+2. Create a new Space → choose **Docker** SDK
+3. Install Git LFS: `git lfs install`
+4. Clone the Space repo and copy all backend files into it
+5. Track large files: `git lfs track "*.npy" "*.index" "*.csv"`
+6. Add your `OPENROUTER_API_KEY` as a Secret in Space Settings
+7. Push — HF builds and deploys automatically
+
+Your backend URL will be: `https://YOUR_USERNAME-reviewradar-backend.hf.space`
+
+> Note: Free tier Spaces sleep after inactivity. First request after sleep takes ~30 seconds to wake up.
+
+### Frontend — Vercel (free)
+
+1. Go to **vercel.com** → import your GitHub repo
+2. Set root directory to `review-ui`
+3. Add environment variable: `VITE_API_URL = https://YOUR_USERNAME-reviewradar-backend.hf.space`
+4. Deploy — Vercel builds and gives you a live URL in ~1 minute
+
+### Production start command (if using gunicorn)
+
+```bash
+gunicorn app:app -k uvicorn.workers.UvicornWorker
 ```
 
 ---
@@ -260,7 +304,7 @@ curl -X POST http://127.0.0.1:5000/search \
 - **Single dataset** — The reviews come from one Amazon product category. Queries outside that domain will return results but they may not be meaningful.
 - **LLM rate limits** — OpenRouter free-tier keys have usage caps. Sustained use may hit limits.
 - **Fixed result count** — Always retrieves 15 candidates and shows up to 5. Not configurable from the UI.
-- **Large binary files in git** — `embeddings.npy` and `faiss.index` are 31MB each and tracked in git history. Git LFS is the proper solution for this.
+- **HF Spaces sleep** — Free tier goes to sleep after inactivity, causing ~30 second cold starts.
 
 ---
 
@@ -271,5 +315,4 @@ curl -X POST http://127.0.0.1:5000/search \
 - Charts — sentiment distribution visualization for search results
 - Review count controls — let the user choose how many results to return
 - Pagination — load more results without rerunning the search
-- Deployment — Render for the backend, Vercel for the frontend
-- Git LFS — move large binary files out of regular git tracking
+- Text chunking — split long reviews into smaller chunks before embedding for better retrieval precision
