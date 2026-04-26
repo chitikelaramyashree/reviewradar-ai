@@ -1,41 +1,43 @@
-from flask import Flask, request, jsonify
-from flask_cors import CORS
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, field_validator
 from model import search_and_summarize
-import os
 import traceback
 
-app = Flask(__name__)
-CORS(app)
+app = FastAPI(
+    title="ReviewRadar AI",
+    description="Semantic retrieval and analysis system for Amazon product reviews",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
-@app.route("/search", methods=["POST"])
-def search():
-    data = request.get_json(silent=True)
+class SearchRequest(BaseModel):
+    query: str
 
-    if data is None:
-        return jsonify({"error": "Request body must be valid JSON with Content-Type: application/json"}), 400
+    @field_validator("query")
+    @classmethod
+    def query_must_not_be_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("Field 'query' must be a non-empty string")
+        return v.strip()
 
-    query = data.get("query")
 
-    if query is None:
-        return jsonify({"error": "Missing required field: 'query'"}), 400
-
-    if not isinstance(query, str) or not query.strip():
-        return jsonify({"error": "Field 'query' must be a non-empty string"}), 400
-
+@app.post("/search")
+def search(body: SearchRequest):
     try:
-        result = search_and_summarize(query.strip())
-        return jsonify({"response": result})
+        result = search_and_summarize(body.query)
+        return {"response": result}
     except Exception:
         traceback.print_exc()
-        return jsonify({"error": "Search pipeline failed. Please try again."}), 500
+        raise HTTPException(status_code=500, detail="Search pipeline failed. Please try again.")
 
 
-@app.route("/health", methods=["GET"])
+@app.get("/health")
 def health():
-    return jsonify({"status": "ready"})
-
-
-if __name__ == "__main__":
-    debug = os.getenv("FLASK_DEBUG", "false").lower() == "true"
-    app.run(debug=debug)
+    return {"status": "ready"}

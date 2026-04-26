@@ -9,7 +9,7 @@ function AnalyzerPage({ onBack }) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const apiBase = import.meta.env.VITE_API_URL || "http://127.0.0.1:5000";
+  const apiBase = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
   const sendQuery = async () => {
     if (!queryInput.trim()) return;
