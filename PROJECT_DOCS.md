@@ -1,24 +1,25 @@
 # ReviewRadar AI — Project Documentation
 
-An AI-powered review analysis system that extracts insights from Amazon customer reviews using semantic search, sentiment filtering, and LLM-based summarization.
+An AI-powered review analysis system. Upload any CSV of customer reviews, ask questions in plain English, and get semantic search, sentiment analysis, product filtering, analytics, and LLM-generated insights.
 
 ---
 
 ## What This Project Does
 
-ReviewRadar AI lets you search through thousands of Amazon reviews using natural language. Instead of keyword matching, it understands the *meaning* behind your query and returns the most relevant reviews — then uses a large language model to summarize the key issues into plain-English bullet points.
+ReviewRadar AI lets you analyse any dataset of customer reviews using natural language. Instead of keyword matching, it understands the *meaning* behind your query and returns the most relevant reviews — then uses a large language model to summarize the key issues into plain-English bullet points.
 
-**Example:** You type `"poor battery life"`. The system finds the most semantically similar reviews, filters for negative sentiment, and returns a 3-point AI summary of what customers are saying about battery performance — even if the reviews themselves never use the phrase "battery life".
+**Example:** You upload a CSV of electronics reviews and type `"poor battery life"`. The system finds the most semantically similar reviews, filters for negative sentiment, and returns a 3-point AI summary of what customers are saying — even if the reviews never use the phrase "battery life". It also shows what percentage of retrieved reviews were positive vs negative and whether the product is at risk of poor sales.
 
 ---
 
 ## The Problem It Solves
 
-Reading thousands of product reviews manually is impractical. Traditional keyword search misses synonyms and misses intent. ReviewRadar AI combines three AI techniques to give you a signal instead of noise:
+Reading thousands of product reviews manually is impractical. Traditional keyword search misses synonyms and ignores intent. ReviewRadar AI combines four AI techniques to give you a signal instead of noise:
 
-- Semantic search to find conceptually similar reviews
-- Sentiment filtering to surface the right emotional tone
-- LLM summarization to compress findings into action points
+- **Semantic search** — finds reviews that mean the same as your query
+- **Sentiment filtering** — surfaces reviews with the right emotional tone
+- **LLM summarization** — compresses findings into actionable bullet points
+- **Analytics** — gives you a quantified breakdown, not just text
 
 ---
 
@@ -28,38 +29,59 @@ RAG stands for **Retrieval-Augmented Generation**. It is a pattern where a langu
 
 In this project, RAG works as follows:
 
-1. **Retrieve** — FAISS searches 21,000+ pre-embedded Amazon reviews and retrieves the most relevant ones for your query.
+1. **Retrieve** — FAISS searches the uploaded reviews and retrieves the most relevant ones for your query.
 2. **Augment** — The top matching reviews are assembled into a text prompt.
 3. **Generate** — LLaMA 3 reads those reviews and generates a structured summary.
 
-Without the retrieval step, LLaMA 3 would have no knowledge of this specific review dataset. RAG gives the model real, domain-specific context at query time.
+Without the retrieval step, LLaMA 3 would have no knowledge of your specific dataset. RAG gives the model real, domain-specific context at query time.
 
 ---
 
 ## Complete Working Flow
 
+### Phase 1 — Upload
+
 ```
-User types query
+User uploads CSV
         ↓
-React frontend sends POST /search { "query": "..." }
+FastAPI /upload validates the file
         ↓
-FastAPI backend (app.py) validates request via Pydantic model
+pandas reads the CSV into a DataFrame
         ↓
-model.py encodes the query using SentenceTransformer (all-MiniLM-L6-v2)
+detect_columns() auto-maps column names to "Review Text" / "Product Name"
         ↓
-FAISS searches the pre-built index, returns top-15 most similar review indices
+SentenceTransformer encodes all reviews into 384-dim vectors (batch_size=16)
+        ↓
+FAISS IndexFlatL2 is built from those vectors
+        ↓
+Everything stored in memory (custom_state)
+        ↓
+Response: { review_count, products[] }
+```
+
+### Phase 2 — Search
+
+```
+User types query + optional product filter
+        ↓
+React frontend sends POST /search { query, product_name? }
+        ↓
+FastAPI validates request via Pydantic
+        ↓
+If product_name: filter dataset indices first, then rank by cosine similarity
+If no filter:    FAISS searches full index, returns top candidates
         ↓
 DistilBERT classifies the sentiment of the query (POSITIVE or NEGATIVE)
         ↓
-Reviews with matching sentiment are selected (up to 5)
+Each candidate review is classified; reviews matching query sentiment kept (up to 5)
         ↓
-Selected reviews are sent to OpenRouter (LLaMA 3 8B) for summarization
+Selected reviews sent to OpenRouter (LLaMA 3 8B) for summarization
         ↓
-Backend returns a structured text response
+Analytics computed over ALL candidates (not just the 5 shown)
         ↓
-parser.js in the frontend parses the text into structured cards
+Backend returns { reviews[], summary, analytics{} }
         ↓
-UI renders: sentiment badges, review cards, and AI bullet-point summary
+Frontend renders: analytics card, sentiment bar, review cards, AI summary bullets
 ```
 
 ---
@@ -73,7 +95,7 @@ UI renders: sentiment badges, review cards, and AI bullet-point summary
 - FAISS (vector similarity search)
 - HuggingFace Transformers (DistilBERT sentiment)
 - OpenRouter API (LLaMA 3 8B)
-- Uvicorn (ASGI server)
+- Uvicorn / Gunicorn (ASGI server)
 
 **Frontend**
 - React 19 (Vite)
@@ -87,33 +109,32 @@ UI renders: sentiment badges, review cards, and AI bullet-point summary
 genAI/
 ├── backend/
 │   ├── app.py               # FastAPI server — API entry point
-│   ├── model.py             # AI pipeline — search, sentiment, summarization
+│   ├── model.py             # AI pipeline — column detection, search, sentiment, summarization
 │   ├── Dockerfile           # Docker config for Hugging Face Spaces deployment
 │   ├── requirements.txt     # Python dependencies
-│   ├── Amazon_Reviews.csv   # Raw review dataset (~21,000 rows)
-│   ├── embeddings.npy       # Pre-computed review embeddings (31MB)
-│   ├── faiss.index          # Pre-built FAISS similarity index (31MB)
 │   ├── .env                 # Your API key (never commit this)
 │   └── .env.example         # Template — shows required variable names only
 │
 ├── review-ui/
 │   ├── src/
-│   │   ├── App.jsx              # Main app — landing page + analyzer page
+│   │   ├── App.jsx              # Main app — routes between landing and analyzer
 │   │   ├── App.css              # All styles (light/dark, responsive)
 │   │   ├── main.jsx             # React entry point
+│   │   ├── index.css            # Base resets only
 │   │   ├── components/
 │   │   │   ├── LandingPage.jsx  # Hero page with call-to-action
-│   │   │   ├── AnalyzerPage.jsx # Search interface — sends queries, shows results
+│   │   │   ├── AnalyzerPage.jsx # Upload + filter + search + results interface
 │   │   │   ├── ResultCard.jsx   # Single review card with sentiment badge
 │   │   │   └── SummaryCard.jsx  # Single AI insight bullet card
 │   │   └── utils/
-│   │       └── parser.js        # Parses raw backend text into structured data
+│   │       └── parser.js        # Parses LLM markdown into structured card data
 │   ├── index.html
 │   ├── vite.config.js
 │   └── package.json
 │
 ├── README.md
-└── PROJECT_DOCS.md
+├── PROJECT_DOCS.md
+└── BACKEND_DOCS.md
 ```
 
 ---
@@ -123,52 +144,89 @@ genAI/
 ### Backend
 
 **`app.py`**
-FastAPI server with two routes:
-- `POST /search` — validates the incoming JSON using a Pydantic `SearchRequest` model, calls `search_and_summarize`, and returns the result as JSON. Returns descriptive 400/500 errors automatically via Pydantic validation and `HTTPException`.
-- `GET /health` — returns `{"status": "ready"}`. Use this to confirm the server has finished loading models.
+FastAPI server with four routes:
+- `POST /upload` — accepts a CSV file, validates it, calls `load_custom_dataset()`, returns `{ review_count, products[] }`
+- `POST /search` — accepts `{ query, product_name? }`, calls `search_and_summarize()`, returns `{ reviews[], summary, analytics{} }`
+- `GET /status` — returns `{ dataset_loaded: bool, num_reviews: int }` — useful for checking server state
+- `GET /health` — returns `{ status: "ready" }` — used to confirm the server is alive
 
-Interactive API docs are auto-generated at `/docs` (Swagger UI) and `/redoc`.
+Interactive API docs are auto-generated at `/docs` (Swagger UI).
 
 **`model.py`**
 The complete AI pipeline. Loads at startup:
-- `SentenceTransformer("all-MiniLM-L6-v2")` — encodes queries into 384-dimensional vectors
-- `pipeline("sentiment-analysis")` using DistilBERT — classifies positive/negative sentiment
-- Pre-built FAISS index and embeddings from disk
+- `SentenceTransformer("all-MiniLM-L6-v2")` — encodes text into 384-dimensional vectors
+- `DistilBERT` sentiment pipeline — classifies positive/negative sentiment
 
-The exported `search_and_summarize(query)` function runs the full RAG loop.
+Key functions:
+- `detect_columns(df)` — auto-detects review and product column names (case-insensitive)
+- `_normalise_columns(df)` — renames detected columns to internal names and cleans data
+- `load_custom_dataset(df)` — builds embeddings + FAISS index from uploaded data; called once per upload
+- `search_and_summarize(query, product_name)` — runs the full RAG pipeline
+- `_compute_analytics(sentiments)` — calculates sentiment breakdown and business insight
 
 **`Dockerfile`**
-Docker configuration for deploying to Hugging Face Spaces. Uses Python 3.11 slim, installs dependencies, and starts uvicorn on port 7860 (required by HF Spaces).
+Docker configuration for deploying to Hugging Face Spaces. Uses Python 3.11 slim, installs dependencies, and starts Uvicorn on port 7860 (required by HF Spaces).
 
 **`requirements.txt`**
-All Python packages needed. Key packages: `fastapi`, `uvicorn[standard]`, `sentence-transformers`, `transformers`, `faiss-cpu`, `torch`, `openai`, `pandas`, `numpy`.
+All Python dependencies. Key additions vs a standard FastAPI app: `python-multipart` (required for file upload), `sentence-transformers`, `transformers`, `faiss-cpu`, `torch`.
 
 ### Frontend
 
-**`App.jsx`**
-Two pages managed by a `page` state variable (`"home"` or `"analyzer"`):
-- `LandingPage` — explains the product and shows an "Analyze Reviews" call-to-action button.
-- `AnalyzerPage` — the search interface. Sends the query to the backend, receives results, and passes them to `parser.js`. Has a Back button to return to the landing page and a Clear button to reset results.
+**`AnalyzerPage.jsx`**
+The main working interface. Contains three steps:
+1. **Upload** — file picker + upload button; shows indexed review count and detected products on success
+2. **Filter** — product dropdown (only shown when CSV has a product column); shows "not available" message otherwise
+3. **Analyze** — search input + button; both disabled until a dataset is loaded
+
+Results section shows: analytics card (with sentiment bar), key insights (SummaryCards), top reviews (ResultCards).
 
 **`parser.js`**
-The backend returns plain text with markers like `🔍 Query:`, `[POSITIVE]`/`[NEGATIVE]` tags, `Top Results:`, and `Summary:`. `parseAIResponse()` uses regex to extract these sections and returns a plain JavaScript object `{ query, results, summary }` that the UI renders from.
+Exports `parseSummary(text)` — converts the LLM's markdown bullet string into `[{ title, description }]` objects for rendering as `SummaryCard` components.
 
 **`ResultCard.jsx`**
-Renders one review with a color-coded sentiment badge: green for positive, red for negative, grey for neutral.
+Renders one review with a colour-coded sentiment badge: green for positive, red for negative.
 
 **`SummaryCard.jsx`**
-Renders one AI-generated bullet point. If the LLM included a bold title (markdown `**Title**`), it is displayed as a card heading.
+Renders one AI-generated bullet point. Bold markdown titles (`**Title**`) are shown as a card heading.
 
-### Data Files
+---
 
-**`Amazon_Reviews.csv`** (13MB, ~21,000 rows)
-The raw dataset. Each row has a `Review Text` column. Loaded once at startup into a Python list.
+## API Response Formats
 
-**`embeddings.npy`** (31MB)
-A NumPy array of shape `[num_reviews, 384]`. Each row is the pre-computed sentence embedding for the corresponding review. Pre-computing avoids re-encoding 21,000 reviews on every request.
+### `POST /upload`
 
-**`faiss.index`** (31MB)
-A FAISS index built from `embeddings.npy`. Given a query vector, FAISS finds the nearest neighbours in milliseconds across the full dataset.
+```json
+{
+  "message": "Dataset uploaded and indexed successfully.",
+  "review_count": 1842,
+  "products": ["ProductA", "ProductB"]
+}
+```
+
+### `POST /search`
+
+```json
+{
+  "reviews": [
+    { "sentiment": "negative", "text": "The battery died after 2 hours..." }
+  ],
+  "summary": "* **Short life**: Multiple reviewers report...\n* ...",
+  "analytics": {
+    "positive_count": 8,
+    "negative_count": 22,
+    "positive_percentage": 26.7,
+    "negative_percentage": 73.3,
+    "total_reviews_analyzed": 30,
+    "sales_insight": "Risk of poor sales"
+  }
+}
+```
+
+### `GET /status`
+
+```json
+{ "dataset_loaded": true, "num_reviews": 1842 }
+```
 
 ---
 
@@ -178,9 +236,7 @@ A FAISS index built from `embeddings.npy`. Given a query vector, FAISS finds the
 
 | Variable | Required | Description |
 |---|---|---|
-| `OPENROUTER_API_KEY` | Yes | API key from openrouter.ai — used to call LLaMA 3 8B for summarization |
-
-Copy `.env.example` to `.env` and fill in your key:
+| `OPENROUTER_API_KEY` | Yes | API key from openrouter.ai — used to call LLaMA 3 8B |
 
 ```
 OPENROUTER_API_KEY=your_key_here
@@ -192,7 +248,7 @@ OPENROUTER_API_KEY=your_key_here
 |---|---|---|
 | `VITE_API_URL` | `http://127.0.0.1:8000` | Base URL of the FastAPI backend |
 
-Only needed if you deploy the backend somewhere other than localhost. Create `review-ui/.env`:
+Only needed when the backend is deployed somewhere other than localhost:
 
 ```
 VITE_API_URL=https://your-deployed-backend.com
@@ -214,27 +270,21 @@ cd reviewradar-ai
 ```bash
 cd backend
 
-# Create and activate a virtual environment
 python -m venv venv
 .\venv\Scripts\Activate.ps1      # Windows
 # source venv/bin/activate       # macOS / Linux
 
-# Install all dependencies
 pip install -r requirements.txt
 
-# Set up your API key
 cp .env.example .env
-# Open .env and replace the placeholder with your real OpenRouter key
+# Open .env and add your OpenRouter API key
 
-# Start the server
 uvicorn app:app --reload
 ```
 
-The backend starts at `http://127.0.0.1:8000`. The first startup takes **30–90 seconds** while the ML models and index load into memory. Wait for `Application startup complete` before using the UI.
+The first startup takes **20–60 seconds** while ML models download and load. Wait for `Application startup complete`.
 
 ### 3. Frontend setup
-
-Open a second terminal:
 
 ```bash
 cd review-ui
@@ -242,24 +292,32 @@ npm install
 npm run dev
 ```
 
-The UI starts at `http://localhost:5173`. Open that URL in your browser.
+Open `http://localhost:5173`.
 
 ---
 
 ## Testing the API Directly
 
-FastAPI provides interactive docs at `http://127.0.0.1:8000/docs` — you can test endpoints there without any extra tools.
-
-Or via curl:
-
 ```bash
-# Confirm the server is ready
+# Check server is ready
 curl http://127.0.0.1:8000/health
+
+# Check dataset status
+curl http://127.0.0.1:8000/status
+
+# Upload a CSV
+curl -X POST http://127.0.0.1:8000/upload \
+  -F "file=@your_reviews.csv"
 
 # Run a search
 curl -X POST http://127.0.0.1:8000/search \
   -H "Content-Type: application/json" \
   -d '{"query": "poor delivery experience"}'
+
+# Search with product filter
+curl -X POST http://127.0.0.1:8000/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "great quality", "product_name": "ProductA"}'
 ```
 
 ---
@@ -268,28 +326,26 @@ curl -X POST http://127.0.0.1:8000/search \
 
 ### Backend — Hugging Face Spaces (free, 16GB RAM)
 
-Hugging Face Spaces is the recommended free option because it provides 16GB RAM — enough to run torch, DistilBERT, and SentenceTransformers simultaneously.
-
 1. Create a free account at **huggingface.co**
 2. Create a new Space → choose **Docker** SDK
-3. Install Git LFS: `git lfs install`
-4. Clone the Space repo and copy all backend files into it
-5. Track large files: `git lfs track "*.npy" "*.index" "*.csv"`
-6. Add your `OPENROUTER_API_KEY` as a Secret in Space Settings
-7. Push — HF builds and deploys automatically
+3. Clone the Space repo and copy all backend files into it
+4. Add `OPENROUTER_API_KEY` as a Secret in Space Settings
+5. Push — HF builds and deploys automatically
 
-Your backend URL will be: `https://YOUR_USERNAME-reviewradar-backend.hf.space`
+No large files to track with Git LFS — embeddings are generated at runtime from uploaded data.
 
-> Note: Free tier Spaces sleep after inactivity. First request after sleep takes ~30 seconds to wake up.
+Your backend URL: `https://YOUR_USERNAME-reviewradar-backend.hf.space`
+
+> Note: Free tier Spaces sleep after inactivity. First request after sleep takes ~30 seconds to wake.
 
 ### Frontend — Vercel (free)
 
 1. Go to **vercel.com** → import your GitHub repo
 2. Set root directory to `review-ui`
 3. Add environment variable: `VITE_API_URL = https://YOUR_USERNAME-reviewradar-backend.hf.space`
-4. Deploy — Vercel builds and gives you a live URL in ~1 minute
+4. Deploy
 
-### Production start command (if using gunicorn)
+### Production start command
 
 ```bash
 gunicorn app:app -k uvicorn.workers.UvicornWorker
@@ -299,20 +355,19 @@ gunicorn app:app -k uvicorn.workers.UvicornWorker
 
 ## Known Limitations
 
-- **Slow cold start** — Both ML models load into memory at startup. Expect 30–90 seconds before the first request works.
-- **No dataset regeneration script** — If you want to use a different CSV, you must rebuild `embeddings.npy` and `faiss.index` manually.
-- **Single dataset** — The reviews come from one Amazon product category. Queries outside that domain will return results but they may not be meaningful.
+- **In-memory only** — uploaded datasets and their indexes are held in RAM. They are lost when the server restarts. Users must re-upload after a restart or cold start.
+- **Single concurrent dataset** — the server holds one dataset in memory at a time. A new upload replaces the previous one.
+- **Slow cold start** — ML models load at startup. Expect 20–60 seconds before the first request works.
 - **LLM rate limits** — OpenRouter free-tier keys have usage caps. Sustained use may hit limits.
-- **Fixed result count** — Always retrieves 15 candidates and shows up to 5. Not configurable from the UI.
-- **HF Spaces sleep** — Free tier goes to sleep after inactivity, causing ~30 second cold starts.
+- **HF Spaces sleep** — free tier goes to sleep after inactivity, causing ~30 second cold starts.
 
 ---
 
 ## Future Improvements
 
-- Sentiment toggle in the UI — let the user choose positive, negative, or both
-- Regeneration script — CLI tool to rebuild embeddings and the FAISS index from a new CSV
-- Charts — sentiment distribution visualization for search results
-- Review count controls — let the user choose how many results to return
-- Pagination — load more results without rerunning the search
-- Text chunking — split long reviews into smaller chunks before embedding for better retrieval precision
+- **Persist indexes** — save embeddings + FAISS index to disk or object storage so they survive restarts
+- **Multi-user sessions** — per-session dataset isolation instead of a single shared state
+- **Sentiment toggle** — let users choose positive, negative, or both in the UI
+- **Charts** — sentiment distribution visualization for search results
+- **Result count controls** — let users choose how many reviews to return
+- **Chunking** — split long reviews into smaller pieces for better retrieval precision

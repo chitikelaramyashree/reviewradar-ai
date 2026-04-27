@@ -1,6 +1,6 @@
 # ReviewRadar AI — Backend Code Documentation
 
-This document explains every line of the backend code in plain English.
+This document explains every part of the backend code in plain English.
 It is written to help you understand the project for a viva, project report, or if you are new to Python and AI development.
 
 ---
@@ -9,12 +9,12 @@ It is written to help you understand the project for a viva, project report, or 
 
 1. [What the Backend Does (Overview)](#1-what-the-backend-does-overview)
 2. [How the Two Files Work Together](#2-how-the-two-files-work-together)
-3. [app.py — Line by Line](#3-apppy--line-by-line)
-4. [model.py — Line by Line](#4-modelpy--line-by-line)
+3. [app.py — Explained](#3-apppy--explained)
+4. [model.py — Explained](#4-modelpy--explained)
 5. [The Full Pipeline — Step by Step](#5-the-full-pipeline--step-by-step)
 6. [Environment Variables Explained](#6-environment-variables-explained)
 7. [Key Concepts Explained Simply](#7-key-concepts-explained-simply)
-8. [What Happens at Startup vs at Search Time](#8-what-happens-at-startup-vs-at-search-time)
+8. [What Happens at Startup vs at Upload vs at Search Time](#8-what-happens-at-startup-vs-at-upload-vs-at-search-time)
 9. [Error Handling Explained](#9-error-handling-explained)
 10. [Quick Reference — All Functions](#10-quick-reference--all-functions)
 
@@ -22,30 +22,54 @@ It is written to help you understand the project for a viva, project report, or 
 
 ## 1. What the Backend Does (Overview)
 
-The backend is the "brain" of ReviewRadar AI. The React frontend only shows things on screen — it does not do any AI work. All the intelligence lives in the backend.
+The backend is the "brain" of ReviewRadar AI. The React frontend only shows things on screen — all the AI logic lives in the backend.
 
-When a user types a query like `"poor delivery"` and clicks Analyze, this is what the backend does:
+The system works in two phases:
 
+**Phase 1 — Upload**
 ```
-User query ("poor delivery")
+User uploads a CSV file
         |
         v
-[1] Convert query into a number vector (embedding)
+[1] Detect which column contains review text (auto-mapped)
         |
         v
-[2] Search 21,000 reviews for the most similar ones (FAISS)
+[2] Clean the data (remove empty rows, fix types)
+        |
+        v
+[3] Encode all reviews into number vectors (embeddings)
+        |
+        v
+[4] Build a FAISS index for fast similarity search
+        |
+        v
+[5] Store everything in memory
+```
+
+**Phase 2 — Search**
+```
+User types a query (e.g. "poor delivery")
+        |
+        v
+[1] Embed the query into a number vector
+        |
+        v
+[2] Search the FAISS index (or filter by product first)
         |
         v
 [3] Check whether the query is positive or negative (DistilBERT)
         |
         v
-[4] Keep only reviews that match that sentiment
+[4] Keep reviews that match that sentiment (up to 5)
         |
         v
-[5] Send the top 5 reviews to an LLM (LLaMA 3) for summarization
+[5] Send top reviews to LLaMA 3 for summarization
         |
         v
-[6] Return the results + summary back to the frontend
+[6] Compute analytics (positive %, negative %, sales insight)
+        |
+        v
+[7] Return { reviews, summary, analytics } to the frontend
 ```
 
 ---
@@ -53,184 +77,140 @@ User query ("poor delivery")
 ## 2. How the Two Files Work Together
 
 ```
-app.py                          model.py
-------                          --------
-Receives HTTP request           Loads all AI models at startup
-Validates the input             Runs the search pipeline
-Calls search_and_summarize() -->  search_and_summarize()
-Returns JSON response               encodes query
-                                    searches FAISS index
-                                    filters by sentiment
-                                    calls OpenRouter LLM
-                                <-- returns result string
-```
+app.py                             model.py
+------                             --------
+Receives HTTP requests             Loads ML models at startup
+Validates inputs (Pydantic)        Holds dataset state (custom_state)
+POST /upload  ─────────────────>   load_custom_dataset()
+                                       detect_columns()
+                                       encode all reviews
+                                       build FAISS index
+              <─────────────────   returns products[]
 
-- `app.py` is the **entry point** — it handles HTTP communication
-- `model.py` is the **engine** — it handles all the AI logic
+POST /search  ─────────────────>   search_and_summarize()
+                                       embed query
+                                       FAISS / product filter
+                                       sentiment analysis
+                                       LLaMA 3 summary
+                                       compute analytics
+              <─────────────────   returns { reviews, summary, analytics }
+
+GET /status   ─────────────────>   reads custom_state
+              <─────────────────   { dataset_loaded, num_reviews }
+```
 
 ---
 
-## 3. app.py — Line by Line
+## 3. app.py — Explained
+
+### Imports
 
 ```python
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 ```
-**What this does:** Imports two things from the FastAPI library.
-- `FastAPI` — the main class used to create the web server
-- `HTTPException` — used to send error responses with a status code (like 400 or 500)
-
----
-
-```python
-from fastapi.middleware.cors import CORSMiddleware
-```
-**What this does:** Imports CORS middleware.
-
-**What is CORS?**
-CORS stands for Cross-Origin Resource Sharing. When the React frontend (running on `localhost:5173`) tries to call the backend (running on `localhost:8000`), the browser blocks it by default because they are on different ports (different "origins"). CORSMiddleware tells the browser: "It's okay, allow requests from anywhere."
-
----
+- `FastAPI` — creates the web server
+- `HTTPException` — sends error responses with a status code (400, 500, etc.)
+- `UploadFile, File` — FastAPI's types for handling file uploads
 
 ```python
 from pydantic import BaseModel, field_validator
+from typing import Optional
 ```
-**What this does:** Imports two things from Pydantic (a data validation library).
-- `BaseModel` — a base class used to define what shape the incoming request data should have
-- `field_validator` — a decorator used to add custom validation rules on top of the basic type check
-
----
+- `BaseModel` — base class for defining expected request shapes
+- `field_validator` — adds custom validation on top of type checking
+- `Optional` — marks fields that don't have to be provided
 
 ```python
-from model import search_and_summarize
+from model import search_and_summarize, load_custom_dataset, custom_state
 ```
-**What this does:** Imports the main AI function from `model.py`. This line causes `model.py` to run from top to bottom immediately — meaning all models load into memory as soon as the server starts.
-
----
+Importing `model.py` causes it to run top-to-bottom immediately — meaning ML models load into memory as soon as the server starts.
 
 ```python
-import traceback
+import pandas as pd
+import io
 ```
-**What this does:** Imports the traceback module. When an unexpected error happens inside a function, `traceback.print_exc()` prints the full error details to the terminal so the developer can debug it.
+- `pandas` — reads the uploaded CSV bytes into a DataFrame
+- `io.BytesIO` — wraps the raw file bytes so pandas can treat them like a file
 
 ---
+
+### `POST /upload`
 
 ```python
-app = FastAPI(
-    title="ReviewRadar AI",
-    description="Semantic retrieval and analysis system for Amazon product reviews",
-)
+@app.post("/upload")
+async def upload_dataset(file: UploadFile = File(...)):
 ```
-**What this does:** Creates the FastAPI application instance. The `title` and `description` appear in the auto-generated documentation at `/docs`.
+`async` is used here because reading file bytes from a network request is an I/O operation — `async` lets FastAPI handle other requests while waiting.
+
+**Validation steps:**
+1. Checks the file ends with `.csv` — rejects anything else with a 400 error
+2. Reads the bytes and parses with pandas — returns a 400 if the file is corrupt
+3. Calls `load_custom_dataset(df)` which internally detects columns — if no valid review column is found, a `ValueError` is raised and returned as a 400 error
+
+**Response:**
+```json
+{ "message": "...", "review_count": 1842, "products": ["A", "B"] }
+```
 
 ---
 
-```python
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-```
-**What this does:** Attaches the CORS middleware to the app.
-- `allow_origins=["*"]` — allow requests from any domain (the `*` means "all")
-- `allow_methods=["*"]` — allow any HTTP method (GET, POST, etc.)
-- `allow_headers=["*"]` — allow any request headers
-
-This is what allows the React frontend to communicate with the backend without the browser blocking it.
-
----
+### `POST /search`
 
 ```python
 class SearchRequest(BaseModel):
     query: str
+    product_name: Optional[str] = None
 ```
-**What this does:** Defines the expected shape of the request body. When a POST request comes in, FastAPI will automatically check that the body contains a field called `query` and that it is a string. If it is missing or the wrong type, FastAPI returns a 422 error automatically — no manual checking needed.
-
----
+Defines the expected request body. `product_name` is optional — omitting it means "search all products".
 
 ```python
-    @field_validator("query")
-    @classmethod
-    def query_must_not_be_empty(cls, v: str) -> str:
-        if not v.strip():
-            raise ValueError("Field 'query' must be a non-empty string")
-        return v.strip()
+@field_validator("query")
+def query_must_not_be_empty(cls, v: str) -> str:
+    if not v.strip():
+        raise ValueError("Field 'query' must be a non-empty string")
+    return v.strip()
 ```
-**What this does:** Adds a custom validation rule on top of the basic type check.
-- `@field_validator("query")` — this function runs whenever the `query` field is being validated
-- `@classmethod` — required by Pydantic for validators
-- `v` — the value of the `query` field
-- `v.strip()` — removes leading and trailing whitespace
-- `if not v.strip()` — if the query is blank spaces only (e.g. `"   "`), treat it as empty and reject it
-- `return v.strip()` — if valid, return the cleaned version (whitespace trimmed)
+Rejects blank queries (e.g. just spaces) before the AI pipeline even runs.
 
-**Why this matters:** Without this, a user could send `"   "` (just spaces) as a query, which would cause the AI pipeline to behave unexpectedly.
+**Response:**
+```json
+{
+  "reviews": [{ "sentiment": "negative", "text": "..." }],
+  "summary": "* **Issue**: ...",
+  "analytics": { "positive_count": 8, "negative_count": 22, ... }
+}
+```
+
+If no dataset has been uploaded: returns `400 { "error": "No dataset uploaded..." }`.
 
 ---
+
+### `GET /status`
 
 ```python
-@app.post("/search")
-def search(body: SearchRequest):
+@app.get("/status")
+def status():
+    loaded = custom_state["index"] is not None
+    return { "dataset_loaded": loaded, "num_reviews": len(custom_state["reviews"]) if loaded else 0 }
 ```
-**What this does:** Creates a POST endpoint at `/search`. When the frontend sends a POST request to `http://127.0.0.1:8000/search`, this function runs. FastAPI automatically reads the request body, validates it using `SearchRequest`, and passes the result as `body`.
+Reads directly from `custom_state` in `model.py`. Useful for the frontend to check server state without making a search.
 
 ---
 
-```python
-    try:
-        result = search_and_summarize(body.query)
-        return {"response": result}
-```
-**What this does:**
-- Calls the `search_and_summarize` function from `model.py`, passing in the validated query string
-- If it succeeds, returns a JSON object like `{"response": "...results and summary text..."}`
-- FastAPI automatically converts the Python dictionary into JSON
-
----
-
-```python
-    except Exception:
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail="Search pipeline failed. Please try again.")
-```
-**What this does:** Catches any error that occurs inside the AI pipeline.
-- `traceback.print_exc()` — prints the full error to the terminal (so the developer can see what went wrong)
-- `raise HTTPException(status_code=500, ...)` — sends a 500 Internal Server Error response to the frontend with a friendly message
-
----
+### `GET /health`
 
 ```python
 @app.get("/health")
 def health():
     return {"status": "ready"}
 ```
-**What this does:** Creates a simple GET endpoint at `/health`. It returns `{"status": "ready"}` immediately. This is used to check if the server has started and is accepting requests. The frontend or a monitoring tool can ping this route to confirm the backend is alive.
+Returns immediately. Used to confirm the server has started and models have loaded.
 
 ---
 
-## 4. model.py — Line by Line
+## 4. model.py — Explained
 
-### Section 1 — API Client Setup
-
-```python
-from openai import OpenAI
-from dotenv import load_dotenv
-import os
-```
-**What this does:**
-- `OpenAI` — imports the OpenAI client class. Even though we are using OpenRouter (not OpenAI directly), OpenRouter is compatible with the OpenAI SDK, so we reuse it
-- `load_dotenv` — a function that reads the `.env` file and loads the variables into the environment
-- `os` — Python's built-in module for interacting with the operating system (used to read environment variables)
-
----
-
-```python
-load_dotenv()
-```
-**What this does:** Reads the `backend/.env` file and loads `OPENROUTER_API_KEY` into the environment. This must be called before `os.getenv(...)` is used, otherwise the variable will be `None`.
-
----
+### Section 1 — API Client and ML Models
 
 ```python
 client = OpenAI(
@@ -238,351 +218,286 @@ client = OpenAI(
     api_key=os.getenv("OPENROUTER_API_KEY")
 )
 ```
-**What this does:** Creates an OpenAI-compatible API client pointed at OpenRouter instead of OpenAI.
-- `base_url` — redirects all API calls to OpenRouter's server
-- `api_key` — reads the API key from the environment (loaded from `.env` by `load_dotenv()`)
-- `os.getenv("OPENROUTER_API_KEY")` — looks up the value of that variable from the environment
-
-This client is used later inside `openrouter_summary()` to call LLaMA 3.
-
----
-
-### Section 2 — Loading the Dataset
-
-```python
-import pandas as pd
-
-df = pd.read_csv(
-    "Amazon_Reviews.csv",
-    encoding='latin1',
-    engine='python',
-    on_bad_lines='skip'
-)
-```
-**What this does:** Loads the CSV file into a DataFrame (a table in memory).
-- `encoding='latin1'` — the CSV uses the Latin-1 character encoding (not UTF-8). Using the wrong encoding would cause errors on special characters
-- `engine='python'` — uses Python's CSV parser instead of the faster C parser, because the C parser can be strict about malformed rows
-- `on_bad_lines='skip'` — if a row is corrupted or malformed, skip it instead of crashing
-
----
-
-```python
-reviews = df["Review Text"].dropna().astype(str).tolist()
-```
-**What this does:** Extracts the review text column and converts it to a plain Python list.
-- `df["Review Text"]` — selects only the review text column from the table
-- `.dropna()` — removes any rows where the review text is empty/null
-- `.astype(str)` — converts all values to strings (in case any are stored as other types)
-- `.tolist()` — converts from a pandas Series to a plain Python list
-
-After this line, `reviews` is a list like:
-```
-["The product was great but shipping took forever.", "Terrible quality...", ...]
-```
-
-The index of each review in this list matches the index in the FAISS index and the embeddings array. This alignment is critical — if FAISS returns index 42, then `reviews[42]` is the correct review text.
-
----
-
-### Section 3 — Loading the AI Models
-
-```python
-from sentence_transformers import SentenceTransformer
-from transformers import pipeline
-```
-**What this does:** Imports the two AI model libraries.
-- `SentenceTransformer` — for converting text into number vectors (embeddings)
-- `pipeline` — a HuggingFace helper that wraps any model into a simple callable function
-
----
+Creates an OpenAI-compatible client pointed at OpenRouter. OpenRouter provides access to LLaMA 3 without needing Meta's API directly.
 
 ```python
 model = SentenceTransformer("all-MiniLM-L6-v2")
 ```
-**What this does:** Downloads (first time) and loads the `all-MiniLM-L6-v2` model into memory.
-
-**What this model does:**
-- Takes any text as input
-- Outputs a vector of 384 numbers that represents the *meaning* of that text
-- Two texts with similar meaning will produce vectors that are numerically close to each other
-- This is what enables semantic search — finding reviews that mean the same thing as the query, not just matching the same words
-
-**Example:**
-```
-"bad shipping"    --> [0.12, -0.34, 0.87, ...]   (384 numbers)
-"slow delivery"   --> [0.11, -0.31, 0.85, ...]   (384 numbers, similar!)
-"great product"   --> [-0.45, 0.92, -0.12, ...]  (very different numbers)
-```
-
----
+Loads the sentence embedding model. Takes any text and outputs 384 numbers representing its meaning. Two texts with similar meaning produce numerically similar vectors — this is what powers semantic search.
 
 ```python
 sentiment_model = pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english")
 ```
-**What this does:** Loads a pre-trained DistilBERT model fine-tuned for sentiment analysis.
-
-**What this model does:**
-- Takes any text as input
-- Returns `POSITIVE` or `NEGATIVE` with a confidence score
-- Trained on the SST-2 dataset (Stanford Sentiment Treebank)
-
-**Example:**
-```
-sentiment_model("great product")   --> {"label": "POSITIVE", "score": 0.99}
-sentiment_model("terrible quality") --> {"label": "NEGATIVE", "score": 0.98}
-```
+Loads a DistilBERT model fine-tuned to classify text as POSITIVE or NEGATIVE. Both models load **once at startup** and stay in memory for the lifetime of the server.
 
 ---
 
-### Section 4 — The LLM Summary Function
+### Section 2 — Dataset State
 
 ```python
-def openrouter_summary(text):
-    response = client.chat.completions.create(
-        model="meta-llama/llama-3-8b-instruct",
+custom_state = {
+    "reviews": [],   # list of review text strings
+    "df": None,      # cleaned pandas DataFrame
+    "embeddings": None,  # numpy array of shape [n, 384]
+    "index": None,   # FAISS IndexFlatL2
+    "products": [],  # unique product names
+}
 ```
-**What this does:** Calls the OpenRouter API to generate a summary using LLaMA 3 8B Instruct.
-- `meta/llama-3-8b-instruct` — specifies which model to use. LLaMA 3 8B is Meta's open-source language model with 8 billion parameters
+This dictionary is the server's memory for the current dataset. It starts empty. `load_custom_dataset()` fills it. `search_and_summarize()` reads from it. A new upload replaces everything.
 
 ---
 
-```python
-        messages=[
-            {
-                "role": "system",
-                "content": "You analyze customer reviews and extract key insights."
-            },
-            {
-                "role": "user",
-                "content": f"""
-Analyze these reviews and give 3 clear bullet points of the main issues:
+### Section 3 — Column Detection
 
-{text}
-"""
-            }
-        ]
+```python
+_REVIEW_CANDIDATES = ["Review Text", "review", "text", "content", "comment"]
+_PRODUCT_CANDIDATES = ["Product Name", "product", "category", "title"]
 ```
-**What this does:** Sends a two-part conversation to the LLM.
-- `"role": "system"` — sets the LLM's persona/instructions. It tells the model what kind of assistant it should be
-- `"role": "user"` — the actual question/prompt. It injects the collected review text using an f-string
-- The `{text}` placeholder is replaced with the actual review content at runtime
-
-This is the **prompt engineering** part of the project — carefully crafting the instruction to get useful output from the LLM.
-
----
+Priority-ordered lists of column names to try. The first match wins.
 
 ```python
-    return response.choices[0].message.content
-```
-**What this does:** Extracts the text response from the API result.
-- `response.choices` — a list of possible responses (usually just one)
-- `[0]` — takes the first (and only) response
-- `.message.content` — extracts the actual text string from the response object
-
----
-
-### Section 5 — Loading the FAISS Index
-
-```python
-import numpy as np
-import faiss
-
-review_embeddings = np.load("embeddings.npy")
-index = faiss.read_index("faiss.index")
-```
-**What this does:** Loads the pre-built vector database from disk.
-- `np.load("embeddings.npy")` — loads the NumPy array of pre-computed embeddings (shape: 21055 × 384)
-- `faiss.read_index("faiss.index")` — loads the FAISS index, which is a data structure optimized for fast nearest-neighbour search
-
-**Why pre-computed?**
-Encoding 21,000 reviews with SentenceTransformer takes several minutes. By computing all embeddings once and saving them, the server loads in seconds and never has to re-encode the dataset.
-
----
-
-### Section 6 — The Main Search Function
-
-```python
-def search_and_summarize(query, k=15):
-```
-**What this does:** Defines the main function that runs the full AI pipeline. `k=15` means "retrieve the top 15 most similar reviews" (default value, can be overridden when calling).
-
----
-
-```python
-    query_embedding = model.encode([query])
-```
-**What this does:** Converts the user's query text into a 384-dimensional vector using SentenceTransformer.
-- `[query]` — wraps the string in a list because `encode()` expects a list of strings
-- Returns a NumPy array of shape `(1, 384)`
-
----
-
-```python
-    D, I = index.search(query_embedding, k)
-```
-**What this does:** Searches the FAISS index for the `k` nearest vectors to the query embedding.
-- `D` — distances (how similar each result is — lower distance = more similar)
-- `I` — indices (the position of each matching review in the `reviews` list)
-- `I[0]` is a list of 15 index numbers, e.g. `[4521, 102, 8834, ...]`
-
-This is the core semantic search step. FAISS scans all 21,000 embeddings in milliseconds using optimized vector math.
-
----
-
-```python
-    output = f"🔍 Query: {query}\n\nTop Results:\n\n"
-    collected_text = ""
-```
-**What this does:** Initializes two strings.
-- `output` — the final response string that will be returned to the frontend. Starts with the query label
-- `collected_text` — accumulates the text of matching reviews, which will later be sent to the LLM
-
----
-
-```python
-    target_sentiment = sentiment_model(query)[0]['label']
-```
-**What this does:** Runs the query itself through the sentiment model to determine the user's intent.
-- `sentiment_model(query)` — returns a list like `[{"label": "NEGATIVE", "score": 0.97}]`
-- `[0]['label']` — extracts just the label string: `"POSITIVE"` or `"NEGATIVE"`
-
-**Why this is important:** If someone searches for `"great battery life"`, they want positive reviews about battery. If they search for `"poor battery life"`, they want negative reviews. This step detects that intent automatically.
-
----
-
-```python
-    count = 0
-
-    for idx in I[0]:
-        text = reviews[idx]
-```
-**What this does:** Loops over the 15 indices returned by FAISS and looks up the actual review text using the index.
-- `I[0]` — the list of 15 indices (e.g. `[4521, 102, 8834, ...]`)
-- `reviews[idx]` — looks up that index in the reviews list to get the text
-
----
-
-```python
-        sentiment = sentiment_model(text[:512])[0]['label']
-```
-**What this does:** Runs each review through the sentiment model.
-- `text[:512]` — truncates the review to 512 characters. DistilBERT has a maximum input length, so very long reviews must be trimmed before classifying
-
----
-
-```python
-        if target_sentiment is None or sentiment == target_sentiment:
-            output += f"[{sentiment}] {text}\n\n"
-            collected_text += text + " "
-            count += 1
-```
-**What this does:** Filters reviews to keep only those matching the query's sentiment.
-- `sentiment == target_sentiment` — only include reviews where the sentiment matches (e.g. both NEGATIVE)
-- `output += f"[{sentiment}] {text}\n\n"` — appends the review to the output string with a sentiment label like `[NEGATIVE]`
-- `collected_text += text + " "` — also collects the raw text for the LLM summary
-
----
-
-```python
-        if count >= 5:
-            break
-```
-**What this does:** Stops after collecting 5 matching reviews. We search 15 but only show 5 — the extras are a buffer in case some don't match the target sentiment.
-
----
-
-```python
-    if collected_text:
-        summary = openrouter_summary(collected_text[:2000])
-        output += "\nSummary:\n" + summary
-    return output
+def detect_columns(df: pd.DataFrame) -> tuple[str, str | None]:
 ```
 **What this does:**
-- `if collected_text` — only calls the LLM if there is at least one matching review
-- `collected_text[:2000]` — truncates to 2000 characters to stay within LLM token limits and keep API costs low
-- Appends the LLM-generated summary to the output string
-- Returns the complete output string back to `app.py`
+1. Builds a lookup of all column names, lowercased and stripped of whitespace
+2. Searches `_REVIEW_CANDIDATES` in order — returns the first match
+3. Raises a `ValueError` with a helpful message if no review column is found
+4. Searches `_PRODUCT_CANDIDATES` — returns `None` if not found (product filtering simply won't be available)
+5. Prints which columns were detected — visible in server logs
+
+**Why case-insensitive matching?**
+Real-world CSVs have inconsistent casing. `"TEXT"`, `"text"`, `"Text"` all match the candidate `"text"` because both are lowercased before comparison.
+
+```python
+def _normalise_columns(df: pd.DataFrame) -> pd.DataFrame:
+```
+**What this does:**
+1. Calls `detect_columns()` to get the real column names
+2. Selects only those two columns and renames them to `"Review Text"` and `"Product Name"`
+3. Coerces values to strings, strips whitespace, replaces blank strings and `"nan"` with `pd.NA`
+
+After this function, the rest of the pipeline can always use `"Review Text"` and `"Product Name"` without knowing what the original column names were.
+
+---
+
+### Section 4 — Building the Dataset Index
+
+```python
+def load_custom_dataset(df: pd.DataFrame) -> list:
+```
+**What this does, step by step:**
+
+```python
+df = _normalise_columns(df)
+df_clean = df[df["Review Text"].notna()].reset_index(drop=True)
+reviews = df_clean["Review Text"].astype(str).tolist()
+```
+Normalises columns, removes rows with no review text, converts to a Python list.
+
+```python
+if not reviews:
+    raise ValueError("No valid review rows found after cleaning...")
+```
+Guards against empty datasets before the expensive encoding step.
+
+```python
+embeddings = model.encode(reviews, batch_size=16, show_progress_bar=True)
+```
+Encodes all reviews into vectors. `batch_size=16` keeps memory usage low on modest hardware (raise to 32/64 on machines with more RAM). This is the most expensive step — done **once per upload**, never per search.
+
+```python
+dim = embeddings.shape[1]   # 384 for all-MiniLM-L6-v2
+idx = faiss.IndexFlatL2(dim)
+idx.add(embeddings)
+```
+Builds a flat L2 FAISS index. "Flat" means every vector is compared exactly (no approximation). Accurate but fast enough for datasets up to ~100k rows.
+
+```python
+products = sorted(df_clean["Product Name"].dropna().unique().tolist())
+```
+Extracts sorted unique product names (if the column exists).
+
+All results stored in `custom_state` and `products` returned to `app.py`.
+
+---
+
+### Section 5 — Product Filtering
+
+```python
+def _product_indices(product_name: str) -> list:
+```
+Returns the row indices in the DataFrame that match the given product name. Used to build a subset for filtered searches.
+
+```python
+def _search_subset(query_emb: np.ndarray, indices: list, k: int) -> list:
+```
+For product-filtered searches, instead of using the full FAISS index, this function:
+1. Extracts only the embeddings for the filtered rows
+2. Computes dot-product similarity between the query and that subset
+3. Returns the top-k global indices
+
+**Why not use FAISS for this?**
+FAISS `IndexFlatL2` doesn't support pre-filtering by a mask. Building a separate FAISS index per product would be wasteful. For a filtered subset, a direct numpy dot-product is simple and fast.
+
+---
+
+### Section 6 — Analytics
+
+```python
+def _compute_analytics(sentiments: list) -> dict:
+```
+Takes a list of `"POSITIVE"` / `"NEGATIVE"` strings and returns:
+- Raw counts and percentages
+- A business insight based on thresholds:
+  - `> 70%` positive → "High potential for increased sales"
+  - `40–70%` → "Moderate performance"
+  - `< 40%` → "Risk of poor sales"
+
+Analytics are computed over **all retrieved candidate reviews**, not just the 5 displayed. This gives a more representative signal.
+
+---
+
+### Section 7 — LLM Summary
+
+```python
+def openrouter_summary(text: str) -> str:
+    response = client.chat.completions.create(
+        model="meta-llama/llama-3-8b-instruct",
+        messages=[
+            {"role": "system", "content": "You analyze customer reviews and extract key insights."},
+            {"role": "user", "content": "Analyze these reviews and give 3 clear bullet points...\n\n" + text}
+        ]
+    )
+    return response.choices[0].message.content
+```
+Sends the collected review text to LLaMA 3 via OpenRouter. The `system` message sets the model's persona; the `user` message contains the actual reviews. This is the **prompt engineering** part of the project.
+
+The text is truncated to 2000 characters before sending to stay within token limits and keep API costs low.
+
+---
+
+### Section 8 — Main Search Function
+
+```python
+def search_and_summarize(query: str, k: int = 15, product_name: str = None) -> dict:
+```
+
+```python
+if custom_state["index"] is None:
+    raise RuntimeError("No dataset uploaded. Please upload a dataset first.")
+```
+Hard guard — if no CSV has been uploaded, raises immediately. `app.py` catches this and returns a 400 error.
+
+```python
+if product_name:
+    p_indices = _product_indices(product_name)
+    candidate_indices = _search_subset(query_emb, p_indices, k * 3)
+else:
+    D, I = index.search(query_emb, min(k * 3, len(reviews)))
+    candidate_indices = [i for i in I[0] if i >= 0]
+```
+Two search paths:
+- **With product filter**: use `_search_subset` on the filtered indices
+- **Without filter**: use full FAISS index search
+
+`k * 3` (45 candidates by default) gives a large enough pool so that after sentiment filtering, at least 5 reviews of the right sentiment remain.
+
+```python
+target_sentiment = sentiment_model(query)[0]["label"]
+```
+Detects the user's intent. `"poor delivery"` → NEGATIVE; `"great quality"` → POSITIVE. The pipeline then surfaces only reviews matching this intent.
+
+```python
+for idx in candidate_indices:
+    sentiment = sentiment_model(text[:512])[0]["label"]
+    all_sentiments.append(sentiment)
+    if sentiment == target_sentiment and len(collected_reviews) < 5:
+        collected_reviews.append(...)
+        collected_text += text + " "
+```
+Every candidate review is classified. All sentiments are saved for analytics; only intent-matching ones (up to 5) are collected for display and LLM summarization.
 
 ---
 
 ## 5. The Full Pipeline — Step by Step
 
+### Startup (runs once)
 ```
-STARTUP (runs once when server starts)
-=======================================
+uvicorn app:app starts
+        |
+        v
+model.py is imported → runs top to bottom
+        |
+        v
+SentenceTransformer loads (~10–20 sec, downloads ~91MB first time)
+DistilBERT loads       (~15–30 sec, downloads ~268MB first time)
+        |
+        v
+custom_state = all None/empty  ← no data loaded yet
+        |
+        v
+"Application startup complete"
+```
 
-  Amazon_Reviews.csv
-          |
-          | pandas reads CSV
-          v
-  reviews[] list (21,055 review texts in memory)
+### Upload Phase (runs once per CSV upload)
+```
+POST /upload with CSV bytes
+        |
+        v
+pandas reads CSV → DataFrame
+        |
+        v
+detect_columns() → maps real column names to "Review Text" / "Product Name"
+        |
+        v
+_normalise_columns() → renames, cleans, drops empty rows
+        |
+        v
+model.encode(reviews, batch_size=16)  ← encodes all reviews (slow, done once)
+        |
+        v
+faiss.IndexFlatL2 built and populated
+        |
+        v
+custom_state populated with reviews, df, embeddings, index, products
+        |
+        v
+Response: { review_count: 1842, products: [...] }
+```
 
-  embeddings.npy
-          |
-          | numpy loads array
-          v
-  review_embeddings (21,055 × 384 matrix)
-
-  faiss.index
-          |
-          | faiss reads index
-          v
-  index (searchable vector database)
-
-  SentenceTransformer loads --> model (encodes text to vectors)
-  DistilBERT loads          --> sentiment_model (positive/negative)
-
-
-
-QUERY TIME (runs on every search request)
-==========================================
-
-  User types: "poor delivery experience"
-          |
-          v
-  [app.py] POST /search received
-          |
-          | Pydantic validates body
-          v
-  SearchRequest.query = "poor delivery experience"
-          |
-          | calls search_and_summarize()
-          v
-  [model.py] model.encode(["poor delivery experience"])
-          |
-          | SentenceTransformer converts text to vector
-          v
-  query_embedding = [0.12, -0.45, 0.87, ...] (384 numbers)
-          |
-          | FAISS searches 21,055 vectors
-          v
-  Top 15 most similar review indices: [4521, 102, 8834, ...]
-          |
-          | sentiment_model("poor delivery experience")
-          v
-  target_sentiment = "NEGATIVE"
-          |
-          | Loop through 15 reviews
-          | Keep only NEGATIVE ones
-          v
-  Top 5 matching reviews selected
-          |
-          | collected_text sent to OpenRouter API
-          v
-  LLaMA 3 generates 3-bullet summary
-          |
-          | Build output string
-          v
-  output = "Query: ... Top Results: ... Summary: ..."
-          |
-          | app.py returns as JSON
-          v
-  {"response": "...full output text..."}
-          |
-          | Frontend receives JSON
-          | parser.js parses it into cards
-          v
-  UI renders review cards + summary bullets
+### Search Phase (runs on every query)
+```
+POST /search { query: "poor delivery", product_name: "ProductA" }
+        |
+        v
+Pydantic validates body
+        |
+        v
+check custom_state["index"] is not None  ← guard
+        |
+        v
+model.encode([query]) → query_embedding (384 numbers)
+        |
+        v
+if product_name → filter indices → dot-product rank
+else            → FAISS index.search(query_embedding, 45)
+        |
+        v
+sentiment_model(query) → target_sentiment = "NEGATIVE"
+        |
+        v
+for each of 45 candidates:
+    classify sentiment
+    if matches target AND count < 5 → collect for display + LLM
+        |
+        v
+openrouter_summary(collected_text[:2000]) → LLaMA 3 response
+        |
+        v
+_compute_analytics(all 45 sentiments) → { positive_%, negative_%, insight }
+        |
+        v
+return { reviews[], summary, analytics{} }
 ```
 
 ---
@@ -591,7 +506,7 @@ QUERY TIME (runs on every search request)
 
 ### What is an Environment Variable?
 
-An environment variable is a value stored outside your code — in the operating system or a special file — that your code can read at runtime. This keeps sensitive information like API keys out of your source code.
+A value stored outside your code — in a file or the OS — that your code reads at runtime. Keeps sensitive information (API keys) out of source code.
 
 ### The `.env` File
 
@@ -599,48 +514,28 @@ An environment variable is a value stored outside your code — in the operating
 OPENROUTER_API_KEY=sk-or-v1-xxxxxxxxxxxxxxxxxxxx
 ```
 
-This file lives at `backend/.env`. It is listed in `.gitignore` so it is never uploaded to GitHub.
+Listed in `.gitignore` — never uploaded to GitHub.
 
-### How it flows through the code
+### How it flows
 
 ```
-backend/.env file
+backend/.env
         |
         | load_dotenv() reads the file
         v
-Operating system environment
+OS environment variables
         |
         | os.getenv("OPENROUTER_API_KEY")
         v
 client = OpenAI(api_key="sk-or-v1-xxxx")
         |
-        | used in every API call
         v
-openrouter_summary() sends request with this key
+used in every openrouter_summary() call
 ```
-
-### Step by step
-
-1. `load_dotenv()` is called at the top of `model.py`
-2. It reads `backend/.env` and loads the key-value pairs into the environment
-3. `os.getenv("OPENROUTER_API_KEY")` retrieves the value by name
-4. The value is passed to the OpenAI client as `api_key`
-5. Every time `openrouter_summary()` is called, the client uses this key to authenticate with OpenRouter
 
 ### In deployment (Hugging Face Spaces)
 
-When deployed, there is no `.env` file. Instead, the API key is added as a **Secret** in the HF Space settings. HF injects it into the environment automatically, so `os.getenv("OPENROUTER_API_KEY")` still works without any code changes.
-
-```
-HF Space Secret: OPENROUTER_API_KEY = sk-or-v1-xxxx
-        |
-        | HF injects into environment at runtime
-        v
-os.getenv("OPENROUTER_API_KEY") reads it
-        |
-        v
-Works exactly the same as local .env
-```
+No `.env` file exists. The key is added as a **Secret** in HF Space Settings. HF injects it into the environment, so `os.getenv("OPENROUTER_API_KEY")` works identically.
 
 ---
 
@@ -648,114 +543,86 @@ Works exactly the same as local .env
 
 ### What is a Vector / Embedding?
 
-A computer cannot understand the word "delivery" or "bad". It only understands numbers.
-
-An embedding is a way of converting text into a list of numbers that captures the *meaning* of the text. The numbers are not random — they are produced by a neural network trained on billions of sentences.
+A computer cannot understand words. An embedding converts text into a list of numbers that captures its *meaning*. Texts with similar meaning produce numerically similar vectors.
 
 ```
-"bad delivery"   --> [0.12, -0.34, 0.87, 0.05, ...] (384 numbers)
-"slow shipping"  --> [0.11, -0.31, 0.85, 0.04, ...] (very similar numbers!)
-"great product"  --> [-0.45, 0.92, -0.12, 0.78, ...] (very different numbers)
+"bad delivery"   → [0.12, -0.34, 0.87, ...]   (384 numbers)
+"slow shipping"  → [0.11, -0.31, 0.85, ...]   (very similar!)
+"great product"  → [-0.45, 0.92, -0.12, ...]  (very different)
 ```
 
-Because "bad delivery" and "slow shipping" mean similar things, their number lists are similar. FAISS uses this similarity to find relevant reviews.
+FAISS uses this numeric similarity to find relevant reviews without needing keyword matches.
 
 ---
 
 ### What is FAISS?
 
-FAISS (Facebook AI Similarity Search) is a library that can search through millions of vectors very fast.
-
-Imagine you have 21,000 review embeddings and you want to find the 15 most similar to your query. Checking every single one mathematically would take too long. FAISS uses clever data structures to do this in milliseconds.
-
-```
-Query vector: [0.12, -0.34, 0.87, ...]
-        |
-        | FAISS searches 21,000 stored vectors
-        | using optimized index structure
-        v
-Returns: top 15 indices whose vectors are closest
-```
+FAISS (Facebook AI Similarity Search) searches through thousands of vectors in milliseconds using optimized data structures. `IndexFlatL2` computes exact L2 (Euclidean) distance between the query vector and every stored vector, returning the closest ones.
 
 ---
 
 ### What is Sentiment Analysis?
 
-Sentiment analysis is classifying text as positive or negative.
-
-DistilBERT is a lightweight version of BERT (Bidirectional Encoder Representations from Transformers), a model trained by Google. The version used here was fine-tuned on labelled positive/negative movie and product reviews.
-
+Classifying text as positive or negative. DistilBERT was pre-trained on movie and product reviews and returns:
 ```
-"The product is amazing!"     --> POSITIVE (99% confidence)
-"Terrible, broke in one day." --> NEGATIVE (98% confidence)
+"The product is amazing!" → POSITIVE (99% confidence)
+"Broke after one day."    → NEGATIVE (98% confidence)
 ```
+
+The same model classifies both the query (to detect intent) and each retrieved review (to filter matches).
 
 ---
 
-### What is RAG (Retrieval-Augmented Generation)?
+### What is RAG?
 
-LLaMA 3 is a powerful language model but it has never seen your specific Amazon review dataset. If you ask it "what do customers say about delivery?", it will make up a generic answer.
-
-RAG solves this by:
+RAG = Retrieval-Augmented Generation. Instead of asking LLaMA 3 to recall facts from memory, we retrieve relevant reviews first and inject them into the prompt as context.
 
 ```
-Step 1 (Retrieve): Search your dataset for relevant reviews
-                        ↓
-Step 2 (Augment):  Put those reviews into the prompt as context
-                        ↓
-Step 3 (Generate): Ask the LLM to summarize ONLY those reviews
+Step 1 (Retrieve) → FAISS finds relevant reviews
+Step 2 (Augment)  → reviews put into the LLM prompt
+Step 3 (Generate) → LLaMA 3 summarizes only those reviews
 ```
 
-Now LLaMA 3 is summarizing real reviews from your data, not hallucinating.
+Without RAG, LLaMA 3 would generate a generic answer with no connection to your data.
 
 ---
 
 ### What is Pydantic?
 
-Pydantic is a Python library for data validation. It checks that the data coming into your API has the right shape before your code even runs.
-
-Without Pydantic:
+A validation library that checks incoming data automatically. Without it:
 ```python
 query = data.get("query")
-if query is None:
-    return error...
-if not isinstance(query, str):
-    return error...
-if not query.strip():
-    return error...
+if query is None: return error
+if not isinstance(query, str): return error
+if not query.strip(): return error
 ```
 
-With Pydantic:
-```python
-class SearchRequest(BaseModel):
-    query: str
-
-    @field_validator("query")
-    def query_must_not_be_empty(cls, v):
-        if not v.strip():
-            raise ValueError("...")
-        return v.strip()
-```
-
-FastAPI + Pydantic together handle all validation automatically and return descriptive error messages to the client.
+With Pydantic, all of that is replaced by a class definition. FastAPI reads the class and handles all validation automatically.
 
 ---
 
-## 8. What Happens at Startup vs at Search Time
-
-This is important to understand because the backend takes 30–90 seconds to start. Here is why.
+## 8. What Happens at Startup vs at Upload vs at Search Time
 
 ### At Startup (slow — runs once)
 
-| Action | Time | Why |
-|---|---|---|
-| Load `Amazon_Reviews.csv` into memory | ~2 sec | 13MB file, 21,000 rows |
-| Load `SentenceTransformer` model | ~10 sec | Downloads ~91MB model weights |
-| Load `DistilBERT` sentiment model | ~15 sec | Downloads ~268MB model weights |
-| Load `embeddings.npy` into memory | ~1 sec | 32MB NumPy array |
-| Load `faiss.index` from disk | ~1 sec | 32MB index file |
+| Action | Time |
+|---|---|
+| Load SentenceTransformer model | ~10–20 sec |
+| Load DistilBERT sentiment model | ~15–30 sec |
+| **Total** | **~20–60 sec** |
 
-All of this happens **once** when you run `uvicorn app:app --reload`. After that, everything stays in memory.
+No dataset is loaded. Server is ready but `/search` will return a 400 until a CSV is uploaded.
+
+### At Upload (medium — runs once per CSV)
+
+| Action | Time (1,000 reviews) | Time (20,000 reviews) |
+|---|---|---|
+| Read CSV with pandas | < 1 sec | ~2 sec |
+| Detect and normalise columns | < 1 sec | < 1 sec |
+| Encode reviews (batch_size=16) | ~10 sec | ~3–5 min |
+| Build FAISS index | < 1 sec | ~2 sec |
+
+The encoding step dominates. Increase `batch_size` if your machine has more RAM.
 
 ### At Search Time (fast — runs on every query)
 
@@ -763,45 +630,65 @@ All of this happens **once** when you run `uvicorn app:app --reload`. After that
 |---|---|
 | Validate request (Pydantic) | < 1ms |
 | Encode query with SentenceTransformer | ~50ms |
-| FAISS nearest-neighbour search | ~5ms |
-| Sentiment classify query + 15 reviews | ~200ms |
+| FAISS search (or dot-product filter) | ~5ms |
+| Sentiment classify 45 reviews | ~300ms |
 | Call OpenRouter LLM API | ~2–5 sec |
-| Return response | < 1ms |
+| Compute analytics | < 1ms |
 
-The only slow step at search time is the LLM API call (network request to OpenRouter).
+The LLM API call dominates search time.
 
 ---
 
 ## 9. Error Handling Explained
 
-### In app.py
+### Upload errors
 
 ```
-Request arrives
+POST /upload
+      |
+      | Is it a .csv file?
+      | No  → 400 "Only CSV files are supported."
+      |
+      | Can pandas read it?
+      | No  → 400 "Failed to read CSV: <reason>"
+      |
+      | Does it have a review column?
+      | No  → 400 "Could not find a review-text column. Columns tried: ... Columns found: ..."
+      |
+      | Are there any valid rows?
+      | No  → 400 "No valid review rows found after cleaning."
+      |
+      | Everything OK → 200 { review_count, products }
+```
+
+### Search errors
+
+```
+POST /search
       |
       | Is body valid JSON?
-      | No  --> 422 Unprocessable Entity (FastAPI automatic)
+      | No  → 422 Unprocessable Entity (FastAPI automatic)
       |
-      | Does body have "query" field?
-      | No  --> 422 Unprocessable Entity (Pydantic automatic)
+      | Is query a non-empty string?
+      | No  → 422 "Field 'query' must be a non-empty string"
       |
-      | Is "query" a non-empty string?
-      | No  --> 422 with "Field 'query' must be a non-empty string"
+      | Is a dataset loaded?
+      | No  → 400 { "error": "No dataset uploaded. Please upload a dataset first." }
       |
-      | Does search_and_summarize() crash?
-      | Yes --> 500 "Search pipeline failed. Please try again."
-      |         (full traceback printed to terminal for debugging)
+      | Does the pipeline crash?
+      | Yes → 500 "Search pipeline failed." (full traceback printed to terminal)
       |
-      | Everything OK --> 200 {"response": "..."}
+      | Everything OK → 200 { reviews, summary, analytics }
 ```
 
 ### HTTP Status Codes Used
 
-| Code | Meaning | When it happens |
+| Code | Meaning | When |
 |---|---|---|
-| 200 | OK | Successful search |
+| 200 | OK | Successful upload or search |
+| 400 | Bad Request | Invalid file, missing column, no dataset loaded |
 | 422 | Unprocessable Entity | Invalid request body (Pydantic) |
-| 500 | Internal Server Error | AI pipeline crashed unexpectedly |
+| 500 | Internal Server Error | Unexpected crash in the AI pipeline |
 
 ---
 
@@ -811,22 +698,25 @@ Request arrives
 
 | Function / Class | Purpose |
 |---|---|
-| `SearchRequest` | Pydantic model that validates the incoming POST body |
-| `SearchRequest.query_must_not_be_empty()` | Custom validator — rejects blank queries |
-| `search(body)` | POST `/search` handler — calls the AI pipeline and returns results |
-| `health()` | GET `/health` handler — returns server status |
+| `SearchRequest` | Pydantic model — validates `query` and optional `product_name` |
+| `query_must_not_be_empty()` | Rejects blank or whitespace-only queries |
+| `upload_dataset(file)` | `POST /upload` — reads CSV, calls `load_custom_dataset`, returns count + products |
+| `search(body)` | `POST /search` — calls `search_and_summarize`, returns structured result |
+| `status()` | `GET /status` — returns whether a dataset is loaded |
+| `health()` | `GET /health` — confirms server is alive |
 
 ### model.py
 
 | Function / Variable | Purpose |
 |---|---|
-| `load_dotenv()` | Loads API key from `.env` file into environment |
-| `client` | OpenAI-compatible HTTP client pointed at OpenRouter |
-| `df` | Pandas DataFrame loaded from `Amazon_Reviews.csv` |
-| `reviews` | Plain Python list of all review text strings |
 | `model` | SentenceTransformer — converts text to 384-dim vectors |
 | `sentiment_model` | DistilBERT pipeline — returns POSITIVE or NEGATIVE |
-| `review_embeddings` | NumPy array of pre-computed review vectors (21055 × 384) |
-| `index` | FAISS index — used for fast nearest-neighbour search |
-| `openrouter_summary(text)` | Calls LLaMA 3 via OpenRouter API, returns bullet-point summary |
-| `search_and_summarize(query, k)` | Main pipeline — runs search, sentiment filter, and summarization |
+| `custom_state` | Global dict holding the current dataset, embeddings, and FAISS index |
+| `detect_columns(df)` | Auto-detects review and product column names (case-insensitive) |
+| `_normalise_columns(df)` | Renames detected columns to internal names; cleans data |
+| `load_custom_dataset(df)` | Encodes reviews + builds FAISS index; called once per upload |
+| `_product_indices(name)` | Returns DataFrame row indices matching a product name |
+| `_search_subset(emb, indices, k)` | Dot-product similarity search within a subset of embeddings |
+| `_compute_analytics(sentiments)` | Calculates sentiment %, counts, and business insight label |
+| `openrouter_summary(text)` | Calls LLaMA 3 via OpenRouter, returns bullet-point summary |
+| `search_and_summarize(query, product_name)` | Main pipeline — runs full RAG loop, returns structured dict |

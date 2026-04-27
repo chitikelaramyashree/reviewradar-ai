@@ -7,15 +7,16 @@ const LandingPage = ({ onStart }) => (
     <section className="hero">
       <div className="hero-badge">Powered by FAISS + LLaMA 3</div>
       <h1 className="hero-title">
-        Discover What Customers{" "}
-        <span className="gradient-text">Really Think</span>
+        Understand Any Dataset of{" "}
+        <span className="gradient-text">Customer Reviews</span>
       </h1>
       <p className="hero-subtitle">
-        Search 21,000+ Amazon reviews instantly. Get AI-powered insights,
-        sentiment breakdowns, and plain-English summaries — in seconds.
+        Upload your own CSV, ask questions in plain English, and get
+        AI-powered sentiment analysis, key insights, and sales intelligence
+        — in seconds.
       </p>
       <button className="cta-button" onClick={onStart}>
-        Analyze Reviews →
+        Get Started →
       </button>
     </section>
 
@@ -24,26 +25,26 @@ const LandingPage = ({ onStart }) => (
       <div className="steps">
         <div className="step">
           <div className="step-number">1</div>
-          <h3>Type a Query</h3>
+          <h3>Upload Your CSV</h3>
           <p>
-            Describe a concern or topic like "poor battery life" or "great
-            packaging". No keywords required.
+            Drop in any review dataset. Column names are detected
+            automatically — no manual formatting required.
           </p>
         </div>
         <div className="step">
           <div className="step-number">2</div>
-          <h3>Semantic Search</h3>
+          <h3>Ask a Question</h3>
           <p>
-            FAISS finds the most relevant reviews using AI embeddings — it
-            understands meaning, not just matching words.
+            Type a topic like "poor battery life" or "great packaging".
+            FAISS finds the most semantically relevant reviews instantly.
           </p>
         </div>
         <div className="step">
           <div className="step-number">3</div>
-          <h3>AI Summary</h3>
+          <h3>Get AI Insights</h3>
           <p>
-            LLaMA 3 reads the top reviews and distills them into 3 clear
-            bullet-point insights.
+            LLaMA 3 summarizes the top matches into clear bullet points
+            with sentiment analytics and sales intelligence.
           </p>
         </div>
       </div>
@@ -51,27 +52,27 @@ const LandingPage = ({ onStart }) => (
 
     <section className="features">
       <div className="feature-card">
-        <div className="feature-icon">🔍</div>
-        <h3>Semantic Search</h3>
+        <div className="feature-icon">📂</div>
+        <h3>Bring Your Own Data</h3>
         <p>
-          Understands the intent behind your query and finds reviews that match
-          its meaning, even when phrased differently.
+          Works with any CSV containing review text. Columns are detected
+          automatically — review, text, content, and more.
         </p>
       </div>
       <div className="feature-card">
         <div className="feature-icon">💬</div>
-        <h3>Sentiment Filtering</h3>
+        <h3>Sentiment Analysis</h3>
         <p>
-          Automatically detects whether your query is about a positive or
-          negative experience and surfaces matching reviews.
+          Every review is scored positive or negative. Analytics show
+          the breakdown and a business insight at a glance.
         </p>
       </div>
       <div className="feature-card">
         <div className="feature-icon">🤖</div>
         <h3>LLM Summarization</h3>
         <p>
-          LLaMA 3 synthesizes the top matches into focused bullet points so you
-          get actionable insights without reading everything.
+          LLaMA 3 reads the top matches and distills them into three
+          focused bullet points — actionable and concise.
         </p>
       </div>
     </section>

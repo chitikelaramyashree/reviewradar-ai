@@ -1,16 +1,65 @@
-# React + Vite
+# ReviewRadar AI — Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React 19 (Vite) frontend for the ReviewRadar AI project.
 
-Currently, two official plugins are available:
+---
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Stack
 
-## React Compiler
+- React 19
+- Vite
+- Plain CSS (custom properties, dark mode, responsive)
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+---
 
-## Expanding the ESLint configuration
+## Structure
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+```
+src/
+├── App.jsx               # Routes between LandingPage and AnalyzerPage
+├── App.css               # All app styles
+├── main.jsx              # React entry point
+├── index.css             # Base resets only
+├── components/
+│   ├── LandingPage.jsx   # Hero page with feature overview
+│   ├── AnalyzerPage.jsx  # Upload + filter + search + results
+│   ├── ResultCard.jsx    # Single review card with sentiment badge
+│   └── SummaryCard.jsx   # Single AI insight bullet card
+└── utils/
+    └── parser.js         # Parses LLM markdown into card data
+```
+
+---
+
+## Local Development
+
+```bash
+npm install
+npm run dev
+```
+
+Starts at `http://localhost:5173`. Requires the FastAPI backend running at `http://127.0.0.1:8000`.
+
+---
+
+## Environment Variable
+
+| Variable | Default | Description |
+|---|---|---|
+| `VITE_API_URL` | `http://127.0.0.1:8000` | FastAPI backend URL |
+
+Create `.env` in this directory if you need to point to a deployed backend:
+
+```
+VITE_API_URL=https://your-backend.hf.space
+```
+
+---
+
+## Build for Production
+
+```bash
+npm run build
+```
+
+Output in `dist/`. Deploy to Vercel by setting the root directory to `review-ui`.
