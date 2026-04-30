@@ -250,23 +250,40 @@ This dictionary is the server's memory for the current dataset. It starts empty.
 ### Section 3 — Column Detection
 
 ```python
-_REVIEW_CANDIDATES = ["Review Text", "review", "text", "content", "comment"]
-_PRODUCT_CANDIDATES = ["Product Name", "product", "category", "title"]
+_REVIEW_KEYWORDS = ["review", "text", "content", "comment", "feedback"]
+_PRODUCT_KEYWORDS = ["product", "category", "item", "title", "name"]
 ```
-Priority-ordered lists of column names to try. The first match wins.
+Short keyword lists used for **partial matching** — a column is accepted if its normalised name *contains* any keyword. First match across all columns wins.
+
+```python
+def _norm(col: str) -> str:
+    return col.strip().lower().replace("_", " ").replace("-", " ")
+```
+Helper that normalises a column name for comparison: lowercase, strip whitespace, convert underscores and hyphens to spaces. For example: `"product_name"` → `"product name"`, `"REVIEW-TEXT"` → `"review text"`.
 
 ```python
 def detect_columns(df: pd.DataFrame) -> tuple[str, str | None]:
 ```
 **What this does:**
-1. Builds a lookup of all column names, lowercased and stripped of whitespace
-2. Searches `_REVIEW_CANDIDATES` in order — returns the first match
-3. Raises a `ValueError` with a helpful message if no review column is found
-4. Searches `_PRODUCT_CANDIDATES` — returns `None` if not found (product filtering simply won't be available)
-5. Prints which columns were detected — visible in server logs
+1. Prints all column names found in the uploaded CSV (visible in server logs)
+2. Loops through every column; normalises its name with `_norm()`, then checks whether any keyword appears anywhere in that string (substring match)
+3. Returns the first column whose normalised name contains a review keyword
+4. Raises a `ValueError` with a helpful message if no review column is found
+5. Repeats for product keywords — returns `None` if not found (product filtering simply won't be available)
+6. Prints the matched column name and its normalised form for each detected column
 
-**Why case-insensitive matching?**
-Real-world CSVs have inconsistent casing. `"TEXT"`, `"text"`, `"Text"` all match the candidate `"text"` because both are lowercased before comparison.
+**Why partial matching instead of exact matching?**
+Real-world CSVs use wildly inconsistent column names. Exact matching only caught names like `"review"` or `"text"`. Partial matching catches `"product_name"`, `"ProductName"`, `"item_title"`, `"customer_feedback"`, and more — without needing to enumerate every possible variant.
+
+| Raw column name | Normalised | Matched by keyword |
+|---|---|---|
+| `product_name` | `product name` | `"product"` |
+| `ProductName` | `productname` | `"product"` |
+| `PRODUCT` | `product` | `"product"` |
+| `category_name` | `category name` | `"category"` |
+| `item_name` | `item name` | `"item"` |
+| `customer_feedback` | `customer feedback` | `"feedback"` |
+| `review_text` | `review text` | `"review"` |
 
 ```python
 def _normalise_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -408,14 +425,20 @@ target_sentiment = sentiment_model(query)[0]["label"]
 Detects the user's intent. `"poor delivery"` → NEGATIVE; `"great quality"` → POSITIVE. The pipeline then surfaces only reviews matching this intent.
 
 ```python
+seen_texts = set()
+
 for idx in candidate_indices:
     sentiment = sentiment_model(text[:512])[0]["label"]
     all_sentiments.append(sentiment)
     if sentiment == target_sentiment and len(collected_reviews) < 5:
+        normalised = text.strip().lower()
+        if normalised in seen_texts:
+            continue
+        seen_texts.add(normalised)
         collected_reviews.append(...)
         collected_text += text + " "
 ```
-Every candidate review is classified. All sentiments are saved for analytics; only intent-matching ones (up to 5) are collected for display and LLM summarization.
+Every candidate review is classified. All sentiments are saved for analytics. Only intent-matching reviews are collected for display (up to 5), with duplicates removed via a `seen_texts` set. The set stores each review text lowercased and stripped — so `"Does the Job"` and `"does the job"` are treated as the same entry and only the first is kept.
 
 ---
 
@@ -712,7 +735,8 @@ POST /search
 | `model` | SentenceTransformer — converts text to 384-dim vectors |
 | `sentiment_model` | DistilBERT pipeline — returns POSITIVE or NEGATIVE |
 | `custom_state` | Global dict holding the current dataset, embeddings, and FAISS index |
-| `detect_columns(df)` | Auto-detects review and product column names (case-insensitive) |
+| `_norm(col)` | Normalises a column name: lowercase, strip, underscores/hyphens → spaces |
+| `detect_columns(df)` | Auto-detects review and product columns via partial keyword matching |
 | `_normalise_columns(df)` | Renames detected columns to internal names; cleans data |
 | `load_custom_dataset(df)` | Encodes reviews + builds FAISS index; called once per upload |
 | `_product_indices(name)` | Returns DataFrame row indices matching a product name |

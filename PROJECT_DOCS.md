@@ -48,7 +48,9 @@ FastAPI /upload validates the file
         ↓
 pandas reads the CSV into a DataFrame
         ↓
-detect_columns() auto-maps column names to "Review Text" / "Product Name"
+detect_columns() partial-matches column names to "Review Text" / "Product Name"
+        ↓
+        (normalises: lowercase, strip, underscores/hyphens → spaces; substring match)
         ↓
 SentenceTransformer encodes all reviews into 384-dim vectors (batch_size=16)
         ↓
@@ -73,7 +75,7 @@ If no filter:    FAISS searches full index, returns top candidates
         ↓
 DistilBERT classifies the sentiment of the query (POSITIVE or NEGATIVE)
         ↓
-Each candidate review is classified; reviews matching query sentiment kept (up to 5)
+Each candidate review is classified; reviews matching query sentiment kept (up to 5, deduped)
         ↓
 Selected reviews sent to OpenRouter (LLaMA 3 8B) for summarization
         ↓
@@ -158,7 +160,7 @@ The complete AI pipeline. Loads at startup:
 - `DistilBERT` sentiment pipeline — classifies positive/negative sentiment
 
 Key functions:
-- `detect_columns(df)` — auto-detects review and product column names (case-insensitive)
+- `detect_columns(df)` — auto-detects review and product columns via partial keyword matching (normalises names: lowercase, strip, underscores/hyphens → spaces; matches if any keyword is a substring)
 - `_normalise_columns(df)` — renames detected columns to internal names and cleans data
 - `load_custom_dataset(df)` — builds embeddings + FAISS index from uploaded data; called once per upload
 - `search_and_summarize(query, product_name)` — runs the full RAG pipeline
