@@ -31,56 +31,47 @@ custom_state = {
 }
 
 
-# Keyword lists for partial matching — a column is accepted if its normalised
-# name *contains* any of these keywords (first match wins).
-_REVIEW_KEYWORDS = ["review", "text", "content", "comment", "feedback"]
-_PRODUCT_KEYWORDS = ["product", "category", "item", "title", "name"]
-
-
-def _norm(col: str) -> str:
-    """Lowercase, strip whitespace, replace underscores/hyphens with spaces."""
-    return col.strip().lower().replace("_", " ").replace("-", " ")
+# Candidate column names tried in priority order (first match wins)
+_REVIEW_CANDIDATES = ["Review Text", "review", "text", "content", "comment"]
+_PRODUCT_CANDIDATES = ["Product Name", "product", "category", "title"]
 
 
 def detect_columns(df: pd.DataFrame) -> tuple[str, str | None]:
     """
-    Scan df.columns for the best review-text and product-name columns using
-    partial (substring) matching on normalised column names.
+    Scan df.columns for the best review-text and product-name columns.
 
-    Normalisation: lowercase → strip whitespace → underscores/hyphens → spaces.
-    A column matches a keyword list when any keyword appears anywhere in its
-    normalised name (e.g. "product_name" → "product name" contains "product").
+    Matching is case-insensitive and strips surrounding whitespace so that
+    columns like "  Review Text " or "TEXT" are still found.
 
     Returns:
         (review_col, product_col)  — product_col is None when not found.
     Raises:
         ValueError if no review-text column can be identified.
     """
-    cols = list(df.columns)
-    print(f"[column detection] all columns in CSV: {cols}")
+    # Build a lookup: normalised_name → original column name
+    normalised = {c.strip().lower(): c for c in df.columns}
 
-    def first_partial_match(keywords: list) -> str | None:
-        for col in cols:
-            normed = _norm(col)
-            for kw in keywords:
-                if kw in normed:
-                    return col
+    def first_match(candidates: list) -> str | None:
+        for candidate in candidates:
+            hit = normalised.get(candidate.strip().lower())
+            if hit is not None:
+                return hit
         return None
 
-    review_col = first_partial_match(_REVIEW_KEYWORDS)
+    review_col = first_match(_REVIEW_CANDIDATES)
     if review_col is None:
-        tried = ", ".join(f'"{kw}"' for kw in _REVIEW_KEYWORDS)
+        tried = ", ".join(f'"{c}"' for c in _REVIEW_CANDIDATES)
         raise ValueError(
             f"Could not find a review-text column. "
-            f"Keywords tried (partial match): {tried}. "
-            f"Columns found in your CSV: {cols}"
+            f"Columns tried: {tried}. "
+            f"Columns found in your CSV: {list(df.columns)}"
         )
 
-    product_col = first_partial_match(_PRODUCT_KEYWORDS)
+    product_col = first_match(_PRODUCT_CANDIDATES)
 
-    print(f"[column detection] review text  → '{review_col}' (normalised: '{_norm(review_col)}')")
+    print(f"[column detection] review text  → '{review_col}'")
     if product_col:
-        print(f"[column detection] product name → '{product_col}' (normalised: '{_norm(product_col)}')")
+        print(f"[column detection] product name → '{product_col}'")
     else:
         print("[column detection] product name → not found (product filtering disabled)")
 
@@ -277,7 +268,6 @@ def search_and_summarize(query: str, k: int = 15, product_name: str = None) -> d
     collected_reviews = []
     all_sentiments = []
     collected_text = ""
-    seen_texts = set()
 
     for idx in candidate_indices:
         if idx < 0 or idx >= len(reviews):
@@ -286,12 +276,8 @@ def search_and_summarize(query: str, k: int = 15, product_name: str = None) -> d
         sentiment = sentiment_model(text[:512])[0]["label"]
         all_sentiments.append(sentiment)
 
-        # Keep up to 5 reviews that match the query's sentiment intent, deduped
+        # Keep up to 5 reviews that match the query's sentiment intent
         if sentiment == target_sentiment and len(collected_reviews) < 5:
-            normalised = text.strip().lower()
-            if normalised in seen_texts:
-                continue
-            seen_texts.add(normalised)
             collected_reviews.append({"sentiment": sentiment.lower(), "text": text})
             collected_text += text + " "
 
